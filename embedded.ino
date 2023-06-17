@@ -41,15 +41,16 @@
 // min and max PWM delta whitin a tick
 #define MAX_PWM_CHANGE_PER_TICK_ACCEL 128
 #define MAX_PWM_CHANGE_PER_TICK_DECCEL 80
+#define MAX_PWM 255
+
 
 #define THROTTLE_MIN_VAL 200 // analog value at idle
 #define THROTTLE_MAX_VAL 890 // analog value at max input
 
+
 #define FORWARD 1
 #define REVERSE -1
 
-
-#define MAX_PWM 255
 
 int g_lastThrottlePWM = 0;
 int g_lastDirectionState = 0;
@@ -84,7 +85,6 @@ int smoothAcceleration(int targetPWM) {
       // pwm change is legit
       scaledPWM = targetPWM;
     }
-
     return scaledPWM;
 }
 
@@ -96,7 +96,6 @@ int convertAnalogThrottleToPercent(int val) {
 }
 
 void readThrottleInputs(int &userThrottleAnalogVal, int &userDirectionState) {
-
   int userReverseDigitalVal = digitalRead(SEL_PIN);
   userThrottleAnalogVal = analogRead(THROTTLE_PIN);
 
@@ -129,25 +128,12 @@ boolean hasDirectionConflict(int userDirectionState) {
       && g_lastThrottlePWM != 0;
 }
 
-void updateThrottle() {
-  int userThrottleAnalogVal = 0;
-  int userDirectionState = 0;
-  int protectedDirectionState = 0;
+void saveCurrentThrottleInfos(int scaledPWM, int protectedDirectionState) {
+  g_lastThrottlePWM = scaledPWM;
+  g_lastDirectionState = protectedDirectionState;
+}
 
-  readThrottleInputs(userThrottleAnalogVal, userDirectionState);
-
-  int throttlePercent = convertAnalogThrottleToPercent(userThrottleAnalogVal);
-  int targetPWM = convertPercentToPWM(throttlePercent);
-
-
-  if (hasDirectionConflict(userDirectionState)) {
-    // refuse to change direction. must bring motors to halt before switching
-    printTx("WARNING: refusing to change direction state. Motors not halted");
-    protectedDirectionState = g_lastDirectionState;
-  } else {
-    protectedDirectionState = userDirectionState;
-  }
-
+void doThrottleUpdate(int targetPWM, int protectedDirectionState) {
   int scaledPWM = smoothAcceleration(targetPWM);
 
   // Write the PWM value to the respective pins
@@ -159,8 +145,29 @@ void updateThrottle() {
     analogWrite(W_RPWM, scaledPWM);
   }
 
-  g_lastThrottlePWM = scaledPWM;
-  g_lastDirectionState = protectedDirectionState;
+  saveCurrentThrottleInfos(scaledPWM, protectedDirectionState);
+}
+
+int doDirectionConflictHandling(int userDirectionState) {
+  if (hasDirectionConflict(userDirectionState)) {
+    printTx("WARNING: refusing to change direction state. Motors not halted");
+    return g_lastDirectionState;
+  } else {
+    return userDirectionState;
+  }
+}
+
+void updateThrottle() {
+  int userThrottleAnalogVal = 0;
+  int userDirectionState = 0;
+
+  readThrottleInputs(userThrottleAnalogVal, userDirectionState);
+
+  int throttlePercent = convertAnalogThrottleToPercent(userThrottleAnalogVal);
+
+  doThrottleUpdate(convertPercentToPWM(throttlePercent),
+                   doDirectionConflictHandling(userDirectionState));
+
 }
 
 void updateHydraulics() {
@@ -190,11 +197,10 @@ void updateHydraulics() {
 void updateSteering() {
   // STEER_LEFT = LRPM
   // STEER_RIGHT = RRPM
-
   int lpwm = 0;
   int rpwm = 0;
-
   int val = analogRead(STEERING_PIN);
+
   printTx("STEERING analog value: " + String(val));
 
   if (val > 520) {
@@ -209,7 +215,6 @@ void updateSteering() {
   analogWrite(STEER_LPWM, lpwm);
   analogWrite(STEER_RPWM, rpwm);
 }
-
 
 void setup() {
   Serial.begin(9600);
@@ -238,50 +243,14 @@ void setup() {
   pinMode(HYD_PIN, INPUT);
 
   g_lastDirectionState = FORWARD;
+  g_lastThrottlePWM = 0;
 }
 
-// boolean mustSteer(int steering_val, int hyd_val) {
-//   if (steering_val < 520 && steering_val > 480) {
-//     return false;
-//  }
-//  // choose axis by biggest amplitude relative to 500
-//  int steer = abs(steering_val - 500);
-//  int hyd = abs(hyd_val - 500);
-//
-//  if (steer > hyd) {
-//    return true;
-//  }
-//  return false;
-// }
-
-// void shut_hydraulics() {
-//
-//   analogWrite(HYD_LPWM, 0);
-//   analogWrite(HYD_RPWM, 0);
-// }
-//
-// void shut_steering() {
-//   analogWrite(STEER_LPWM, 0);
-//   analogWrite(STEER_RPWM, 0);
-// }
-
 void loop() {
-
-  int steering_val = analogRead(STEERING_PIN);
-  int hyd_val = analogRead(HYD_PIN);
 
   updateThrottle();
   updateSteering();
   updateHydraulics();
 
-  // // choose only one action from joystick
-  // // stop other action
-  // if (mustSteer(steering_val, hyd_val)) {
-  //   updateSteering();
-  //   shut_hydraulics();
-  // } else {
-  //   updateHydraulics();
-  //   shut_steering();
-  // }
   delay(TICK_MS);
 }
