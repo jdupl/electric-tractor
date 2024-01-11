@@ -15,8 +15,10 @@
 // Steering: actuator must be retracrted to steer RIGHT  b -> STEER_RIGHT = RRPM
 */
 
-#define DEBUG_EN 1 // set to 1 or 0
+#define DEBUG_EN 0 // set to 1 or 0
 #define TICK_MS 50
+
+const int NUM_READINGS = 10;
 
 // Analog pins
 #define THROTTLE_PIN  2
@@ -54,6 +56,9 @@
 
 int g_lastThrottlePWM = 0;
 int g_lastDirectionState = 0;
+int g_hydAnalogCenter;
+int g_steeringAnalogCenter;
+
 
 void printTx(String chars) {
   if (DEBUG_EN == 1) {
@@ -99,9 +104,9 @@ void readThrottleInputs(int &userThrottleAnalogVal, int &userDirectionState) {
   int userReverseDigitalVal = digitalRead(SEL_PIN);
   userThrottleAnalogVal = analogRead(THROTTLE_PIN);
 
-  if (userReverseDigitalVal == 0) {
+  if (userReverseDigitalVal == LOW) {
     userDirectionState = FORWARD;
-  } else {
+  } else if (userReverseDigitalVal == HIGH){
     userDirectionState = REVERSE;
   }
 
@@ -140,7 +145,7 @@ void doThrottleUpdate(int targetPWM, int protectedDirectionState) {
   if (protectedDirectionState == FORWARD) {
     analogWrite(W_LPWM, scaledPWM);
     analogWrite(W_RPWM, 0);
-  } else if (protectedDirectionState == FORWARD) {
+  } else if (protectedDirectionState == REVERSE) {
     analogWrite(W_LPWM, 0);
     analogWrite(W_RPWM, scaledPWM);
   }
@@ -179,10 +184,10 @@ void updateHydraulics() {
   int val = analogRead(HYD_PIN);
   printTx("HYDRAULICS: " + String(val));
 
-   if (val > 520) {
+   if (val > g_hydAnalogCenter + 50) {
     // down
     rpwm = 255;
-   } else if (val < 490) {
+   } else if (val < g_hydAnalogCenter - 50) {
     // up
     lpwm = 255;
    }
@@ -216,6 +221,30 @@ void updateSteering() {
   analogWrite(STEER_RPWM, rpwm);
 }
 
+void calibrateJoysticks() {
+  int hydSum = 0;
+  int steeringSum = 0;
+
+  // Read analog values and calculate the sum for hydraulic joystick pin
+  for (int i = 0; i < NUM_READINGS; i++) {
+    hydSum += analogRead(HYD_PIN);
+    delay(25);
+  }
+
+  g_hydAnalogCenter = hydSum / NUM_READINGS;
+
+  // Read analog values and calculate the sum for steering joystick pin
+  for (int i = 0; i < NUM_READINGS; i++) {
+    steeringSum += analogRead(STEERING_PIN);
+    delay(25);
+  }
+
+  g_steeringAnalogCenter = steeringSum / NUM_READINGS;
+
+  printTx("Hydraulic Joystick Center: " + String(g_hydAnalogCenter));
+  printTx("Hydraulic Steering Center: " + String(g_steeringAnalogCenter));
+}
+
 void setup() {
   Serial.begin(9600);
 
@@ -244,6 +273,8 @@ void setup() {
 
   g_lastDirectionState = FORWARD;
   g_lastThrottlePWM = 0;
+
+  calibrateJoysticks();
 }
 
 void loop() {
