@@ -1,18 +1,24 @@
 /*
-// Electric tractor AKA Tesla killer
-//
-// ALL BTS7960 ctrls Pin 3 (R_EN), 4 (L_EN), 7 (VCC) to Arduino 5V pin
-// ALL BTS7960 ctrls Pin 8 (GND) to Arduino GND
+    Electric tractor AKA Tesla killer
 
-// actuator notes
-// to extend: left RPM
-// to retract: right RPM
+    ALL BTS7960 ctrls Pin 3 (R_EN), 4 (L_EN), 7 (VCC) to Arduino 5V pin
+    ALL BTS7960 ctrls Pin 8 (GND) to Arduino GND
 
-// hydraulics: actuators must be extended to RAISE hyd -> HYD_UP = LRPM
-// hydraulics: actuators must be retracted to LOWER hyd -> HYD_DOWN = RRPM
+    actuator notes
+    to extend: left RPM
+    to retract: right RPM
 
-// Steering: actuator must be extended to steer LEFT -> STEER_LEFT = LRPM
-// Steering: actuator must be retracrted to steer RIGHT  b -> STEER_RIGHT = RRPM
+    hydraulics: actuators must be extended to RAISE hyd -> HYD_UP = LRPM
+    hydraulics: actuators must be retracted to LOWER hyd -> HYD_DOWN = RRPM
+
+    Steering: joystick left gives more power to the right wheel
+*/
+
+/*
+
+TODO: Power distribution to wheels relative to steering joystick (sharp turn)
+TODO: Limit swich to stop hydraulics going up too much
+
 */
 
 #define DEBUG_EN 0 // set to 1 or 0
@@ -28,17 +34,18 @@ const int NUM_READINGS = 10;
 // Digital pins
 #define SEL_PIN 12
 
-// Wheel motors M1/M2
-#define W_RPWM  3 // BTS7960 M1 M2 Pin 1 (RPWM)
-#define W_LPWM  5 // BTS7960 M1 M2 Pin 2 (LPWM)
+// Left wheel motors M1
+#define WL_RPWM  3 // BTS7960 M1 Pin 1 (RPWM)
+#define WL_LPWM  5 // BTS7960 M1 Pin 2 (LPWM)
 
-// hydraulics motors M4
-#define HYD_RPWM  6 // BTS7960 M4 Pin 1 (RPWM)
-#define HYD_LPWM  9 // BTS7960 M4 Pin 2 (LPWM)
+// Right wheel motors M2
+#define WR_RPWM  10 // BTS7960 M2 Pin 1 (RPWM)
+#define WR_LPWM  11 // BTS7960 M2 Pin 2 (LPWM)
 
-// Steering motor M3
-#define STEER_RPWM  10 // BTS7960 M3 Pin 1 (RPWM)
-#define STEER_LPWM  11 // BTS7960 M3 Pin 2 (LPWM)
+// hydraulics motors M3
+#define HYD_RPWM  6 // BTS7960 M3 Pin 1 (RPWM)
+#define HYD_LPWM  9 // BTS7960 M3 Pin 2 (LPWM)
+
 
 // min and max PWM delta whitin a tick
 #define MAX_PWM_CHANGE_PER_TICK_ACCEL 128
@@ -143,11 +150,15 @@ void doThrottleUpdate(int targetPWM, int protectedDirectionState) {
 
   // Write the PWM value to the respective pins
   if (protectedDirectionState == FORWARD) {
-    analogWrite(W_LPWM, scaledPWM);
-    analogWrite(W_RPWM, 0);
+    analogWrite(WL_RPWM, scaledPWM);
+    analogWrite(WL_LPWM, 0);
+    analogWrite(WR_RPWM, scaledPWM);
+    analogWrite(WR_LPWM, 0);
   } else if (protectedDirectionState == REVERSE) {
-    analogWrite(W_LPWM, 0);
-    analogWrite(W_RPWM, scaledPWM);
+    analogWrite(WL_RPWM, 0);
+    analogWrite(WL_LPWM, scaledPWM);
+    analogWrite(WR_RPWM, 0);
+    analogWrite(WR_LPWM, scaledPWM);
   }
 
   saveCurrentThrottleInfos(scaledPWM, protectedDirectionState);
@@ -199,28 +210,6 @@ void updateHydraulics() {
   analogWrite(HYD_RPWM, rpwm);
 }
 
-void updateSteering() {
-  // STEER_LEFT = LRPM
-  // STEER_RIGHT = RRPM
-  int lpwm = 0;
-  int rpwm = 0;
-  int val = analogRead(STEERING_PIN);
-
-  printTx("STEERING analog value: " + String(val));
-
-  if (val > 520) {
-    lpwm = 255;
-  } else if (val < 490) {
-    rpwm = 255;
-  }
-
-  printTx("STEER Left pwm: " + String(lpwm));
-  printTx("STEER right pwm: " + String(rpwm));
-
-  analogWrite(STEER_LPWM, lpwm);
-  analogWrite(STEER_RPWM, rpwm);
-}
-
 void calibrateJoysticks() {
   int hydSum = 0;
   int steeringSum = 0;
@@ -248,23 +237,23 @@ void calibrateJoysticks() {
 void setup() {
   Serial.begin(9600);
 
-  pinMode(W_RPWM, OUTPUT);
-  analogWrite(W_RPWM, 0);
+  pinMode(WL_RPWM, OUTPUT);
+  analogWrite(WL_RPWM, 0);
 
-  pinMode(W_LPWM, OUTPUT);
-  analogWrite(W_LPWM, 0);
+  pinMode(WL_LPWM, OUTPUT);
+  analogWrite(WL_LPWM, 0);
+
+  pinMode(WR_RPWM, OUTPUT);
+  analogWrite(WR_RPWM, 0);
+
+  pinMode(WR_LPWM, OUTPUT);
+  analogWrite(WR_LPWM, 0);
 
   pinMode(HYD_RPWM, OUTPUT);
   analogWrite(HYD_RPWM, 0);
 
   pinMode(HYD_LPWM, OUTPUT);
   analogWrite(HYD_LPWM, 0);
-
-  pinMode(STEER_RPWM, OUTPUT);
-  analogWrite(STEER_RPWM, 0);
-
-  pinMode(STEER_LPWM, OUTPUT);
-  analogWrite(STEER_LPWM, 0);
 
   pinMode(SEL_PIN, INPUT_PULLUP);
   pinMode(THROTTLE_PIN, INPUT);
