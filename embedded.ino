@@ -15,8 +15,6 @@
 */
 
 /*
-
-TODO: Power distribution to wheels relative to steering joystick (sharp turn)
 TODO: Limit swich to stop hydraulics going up too much
 
 */
@@ -32,7 +30,7 @@ const int NUM_READINGS = 10;
 #define STEERING_PIN  0
 
 // Digital pins
-#define SEL_PIN 12
+#define REVERSE_PIN 12
 
 // Left wheel motors M1
 #define WL_RPWM  3 // BTS7960 M1 Pin 1 (RPWM)
@@ -61,7 +59,8 @@ const int NUM_READINGS = 10;
 #define REVERSE -1
 
 
-int g_lastThrottlePWM = 0;
+int g_previousPWMRight = 0;
+int g_previousPWMLeft = 0;
 int g_lastDirectionState = 0;
 int g_hydAnalogCenter;
 int g_steeringAnalogCenter;
@@ -73,25 +72,25 @@ void printTx(String chars) {
   }
 }
 
-int smoothAcceleration(int targetPWM) {
+int smoothAcceleration(int targetPWM, int previousPWM) {
     int scaledPWM = 0;
 
     // no change in PWM
-    if (g_lastThrottlePWM == targetPWM) {
+    if (previousPWM == targetPWM) {
       return targetPWM;
     }
 
-    int pwmDelta = targetPWM - g_lastThrottlePWM;
+    int pwmDelta = targetPWM - previousPWM;
 
     if (pwmDelta > 0 && pwmDelta > MAX_PWM_CHANGE_PER_TICK_ACCEL) {
       // acceleration too fast
       printTx("Slowing down acceleration...");
-      scaledPWM = g_lastThrottlePWM + MAX_PWM_CHANGE_PER_TICK_ACCEL;
+      scaledPWM = previousPWM + MAX_PWM_CHANGE_PER_TICK_ACCEL;
 
     } else if (pwmDelta < 0 && abs(pwmDelta) > MAX_PWM_CHANGE_PER_TICK_DECCEL) {
       // deacceleration too fast
       printTx("Slowing down deacceleration...");
-      scaledPWM = g_lastThrottlePWM - MAX_PWM_CHANGE_PER_TICK_DECCEL;
+      scaledPWM = previousPWM - MAX_PWM_CHANGE_PER_TICK_DECCEL;
 
     } else {
       // pwm change is legit
@@ -108,7 +107,7 @@ int convertAnalogThrottleToPercent(int val) {
 }
 
 void readThrottleInputs(int &userThrottleAnalogVal, int &userDirectionState) {
-  int userReverseDigitalVal = digitalRead(SEL_PIN);
+  int userReverseDigitalVal = digitalRead(REVERSE_PIN);
   userThrottleAnalogVal = analogRead(THROTTLE_PIN);
 
   if (userReverseDigitalVal == LOW) {
@@ -140,28 +139,19 @@ boolean hasDirectionConflict(int userDirectionState) {
       && g_lastThrottlePWM != 0;
 }
 
-void saveCurrentThrottleInfos(int scaledPWM, int protectedDirectionState) {
-  g_lastThrottlePWM = scaledPWM;
-  g_lastDirectionState = protectedDirectionState;
-}
 
-void doThrottleUpdate(int targetPWM, int protectedDirectionState) {
-  int scaledPWM = smoothAcceleration(targetPWM);
-
-  // Write the PWM value to the respective pins
-  if (protectedDirectionState == FORWARD) {
-    analogWrite(WL_RPWM, scaledPWM);
-    analogWrite(WL_LPWM, 0);
-    analogWrite(WR_RPWM, scaledPWM);
-    analogWrite(WR_LPWM, 0);
-  } else if (protectedDirectionState == REVERSE) {
-    analogWrite(WL_RPWM, 0);
-    analogWrite(WL_LPWM, scaledPWM);
-    analogWrite(WR_RPWM, 0);
-    analogWrite(WR_LPWM, scaledPWM);
-  }
-
-  saveCurrentThrottleInfos(scaledPWM, protectedDirectionState);
+void updateMotorsPWM(int scaledPWMRight, int scaledPWMLeft, int direction) {
+    if (direction == FORWARD) {
+        analogWrite(WL_RPWM, scaledPWMLeft);
+        analogWrite(WL_LPWM, 0);
+        analogWrite(WR_RPWM, scaledPWMRight);
+        analogWrite(WR_LPWM, 0);
+    } else if (direction == REVERSE) {
+        analogWrite(WL_RPWM, 0);
+        analogWrite(WL_LPWM, scaledPWMLeft);
+        analogWrite(WR_RPWM, 0);
+        analogWrite(WR_LPWM, scaledPWMRight);
+    }
 }
 
 int doDirectionConflictHandling(int userDirectionState) {
@@ -173,17 +163,51 @@ int doDirectionConflictHandling(int userDirectionState) {
   }
 }
 
-void updateThrottle() {
-  int userThrottleAnalogVal = 0;
-  int userDirectionState = 0;
+void getWheelPowerDistribution(float &rightWheelFactor, float &leftWheelFactor) {
+    int val = analogRead(STEERING_PIN);
 
-  readThrottleInputs(userThrottleAnalogVal, userDirectionState);
+    printTx("STEERING analog value: " + String(val));
 
-  int throttlePercent = convertAnalogThrottleToPercent(userThrottleAnalogVal);
+    int startSteerLeft = g_steeringAnalogCenter + 50;
+    int startSteerRight = g_steeringAnalogCenter - 50;
 
-  doThrottleUpdate(convertPercentToPWM(throttlePercent),
-                   doDirectionConflictHandling(userDirectionState));
+    if (val >= startSteerLeft) {
+        int percent = map(val, startSteerLeft, 1023, 100, 0);
+        leftWheelFactor = percent / 100.0;
+        rightWheelFactor = 1;
+    } else if (val <= startSteerRight) {
+        leftWheelFactor = 1;
+        percent = map(val, 0, startSteerRight, 0, 100);
+        rightWheelFactor = percent / 100.0;
+    } else {
+        leftWheelFactor = 1;
+        rightWheelFactor = 1;
+    }
+    printTx("Wheel power factors R: " + String(rightWheelFactor) + " L: " + String(leftWheelFactor))
+}
 
+void readThrottleAndUpdateWheelMotors() {
+    int userThrottleAnalogVal = 0;
+    int userDirectionState = 0;
+    float rightWheelFactor = 0.0;
+    float leftWheelFactor = 0.0;
+
+    readThrottleInputs(userThrottleAnalogVal, userDirectionState);
+    getWheelPowerDistribution(rightWheelFactor, leftWheelFactor);
+
+    int throttlePercent = convertAnalogThrottleToPercent(userThrottleAnalogVal);
+    int targetPWM = convertPercentToPWM(throttlePercent);
+
+    int scaledPWMRight = smoothAcceleration(targetPWM * rightWheelFactor, g_previousPWMRight);
+    int scaledPWMLeft = smoothAcceleration(targetPWM * leftWheelFactor, g_previousPWMLeft);
+
+    int protectedDirectionState = doDirectionConflictHandling(userDirectionState);
+
+    g_previousPWMRight = scaledPWMRight;
+    g_previousPWMLeft = scaledPWMLeft;
+    g_lastDirectionState = protectedDirectionState;
+
+    updateMotorsPWM(scaledPWMRight, scaledPWMLeft, protectedDirectionState);
 }
 
 void updateHydraulics() {
@@ -255,7 +279,7 @@ void setup() {
   pinMode(HYD_LPWM, OUTPUT);
   analogWrite(HYD_LPWM, 0);
 
-  pinMode(SEL_PIN, INPUT_PULLUP);
+  pinMode(REVERSE_PIN, INPUT_PULLUP);
   pinMode(THROTTLE_PIN, INPUT);
   pinMode(STEERING_PIN, INPUT);
   pinMode(HYD_PIN, INPUT);
@@ -268,8 +292,7 @@ void setup() {
 
 void loop() {
 
-  updateThrottle();
-  updateSteering();
+  readThrottleAndUpdateWheelMotors();
   updateHydraulics();
 
   delay(TICK_MS);
