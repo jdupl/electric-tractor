@@ -32,6 +32,11 @@ const int NUM_READINGS = 10;
 // Digital pins
 #define REVERSE_PIN 12
 
+// limit switch wiring
+// HIGH when untouched, LOW when touched
+// 'C' pin GND  'NO' digital pin pulled up
+#define HYD_LIMIT_SWITCH 23 // green INPUT PULLUP
+
 // Left wheel motors M1
 #define WL_RPWM  3 // BTS7960 M1 Pin 1 (RPWM)
 #define WL_LPWM  5 // BTS7960 M1 Pin 2 (LPWM)
@@ -70,6 +75,10 @@ void printTx(String chars) {
   if (DEBUG_EN == 1) {
     Serial.println(chars);
   }
+}
+
+bool limitSwitchTouched() {
+  return digitalRead(HYD_LIMIT_SWITCH) == LOW;
 }
 
 int smoothAcceleration(int targetPWM, int previousPWM) {
@@ -219,12 +228,16 @@ void updateHydraulics() {
   int val = analogRead(HYD_PIN);
   printTx("HYDRAULICS: " + String(val));
 
-   if (val > g_hydAnalogCenter + 50) {
+   if (val > g_hydAnalogCenter + 250) {
     // down
     rpwm = 255;
-   } else if (val < g_hydAnalogCenter - 50) {
-    // up
-    lpwm = 255;
+   } else if (val < g_hydAnalogCenter - 250) {
+        // up
+        if (limitStichTouched()) {
+            printTx("Limit switch touched");
+        } else {
+            lpwm = 255;
+        }
    }
 
   printTx("HYD up: " + String(lpwm));
@@ -280,6 +293,7 @@ void setup() {
   analogWrite(HYD_LPWM, 0);
 
   pinMode(REVERSE_PIN, INPUT_PULLUP);
+  pinMode(HYD_LIMIT_SWITCH, INPUT_PULLUP);
   pinMode(THROTTLE_PIN, INPUT);
   pinMode(STEERING_PIN, INPUT);
   pinMode(HYD_PIN, INPUT);
