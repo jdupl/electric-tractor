@@ -4,23 +4,14 @@
     ALL BTS7960 ctrls Pin 3 (R_EN), 4 (L_EN), 7 (VCC) to Arduino 5V pin
     ALL BTS7960 ctrls Pin 8 (GND) to Arduino GND
 
-    actuator notes
-    to extend: left RPM
-    to retract: right RPM
-
-    hydraulics: actuators must be extended to RAISE hyd -> HYD_UP = LRPM
-    hydraulics: actuators must be retracted to LOWER hyd -> HYD_DOWN = RRPM
+    hydraulics: actuators must be extended to RAISE hyd -> HYD_UP = RRPM
+    hydraulics: actuators must be retracted to LOWER hyd -> HYD_DOWN = LRPM
 
     Steering: joystick left gives more power to the right wheel
 */
 
-/*
-TODO: Limit swich to stop hydraulics going up too much
-
-*/
-
 #define DEBUG_EN 0 // set to 1 or 0
-#define TICK_MS 50
+#define TICK_MS 20
 
 const int NUM_READINGS = 10;
 
@@ -33,9 +24,9 @@ const int NUM_READINGS = 10;
 #define REVERSE_PIN 12
 
 // limit switch wiring
-// HIGH when untouched, LOW when touched
-// 'C' pin GND  'NO' digital pin pulled up
-#define HYD_LIMIT_SWITCH 23 // green INPUT PULLUP
+// LOW when untouched, HIGH when touched
+// 'NO' pin GND  'C' digital pin pulled up
+#define HYD_LIMIT_SWITCH 13 // green INPUT PULLUP
 
 // Left wheel motors M1
 #define WL_RPWM  3 // BTS7960 M1 Pin 1 (RPWM)
@@ -56,8 +47,8 @@ const int NUM_READINGS = 10;
 #define MAX_PWM 255
 
 
-#define THROTTLE_MIN_VAL 200 // analog value at idle
-#define THROTTLE_MAX_VAL 890 // analog value at max input
+#define THROTTLE_MIN_VAL 0 // analog value at idle
+#define THROTTLE_MAX_VAL 1024 // analog value at max input
 
 
 #define FORWARD 1
@@ -66,6 +57,7 @@ const int NUM_READINGS = 10;
 
 int g_previousPWMRight = 0;
 int g_previousPWMLeft = 0;
+int g_lastThrottlePWM = 0;
 int g_lastDirectionState = 0;
 int g_hydAnalogCenter;
 int g_steeringAnalogCenter;
@@ -78,7 +70,7 @@ void printTx(String chars) {
 }
 
 bool limitSwitchTouched() {
-  return digitalRead(HYD_LIMIT_SWITCH) == LOW;
+  return digitalRead(HYD_LIMIT_SWITCH) == HIGH;
 }
 
 int smoothAcceleration(int targetPWM, int previousPWM) {
@@ -109,6 +101,7 @@ int smoothAcceleration(int targetPWM, int previousPWM) {
 }
 
 int convertAnalogThrottleToPercent(int val) {
+  printTx("analog throttle val" + String(val));
   if (val < THROTTLE_MAX_VAL && val > THROTTLE_MIN_VAL) {
     return map(val, THROTTLE_MIN_VAL, THROTTLE_MAX_VAL, 0, 100);
   }
@@ -150,12 +143,12 @@ boolean hasDirectionConflict(int userDirectionState) {
 
 
 void updateMotorsPWM(int scaledPWMRight, int scaledPWMLeft, int direction) {
-    if (direction == FORWARD) {
+    if (direction == REVERSE) {
         analogWrite(WL_RPWM, scaledPWMLeft);
         analogWrite(WL_LPWM, 0);
         analogWrite(WR_RPWM, scaledPWMRight);
         analogWrite(WR_LPWM, 0);
-    } else if (direction == REVERSE) {
+    } else if (direction == FORWARD) {
         analogWrite(WL_RPWM, 0);
         analogWrite(WL_LPWM, scaledPWMLeft);
         analogWrite(WR_RPWM, 0);
@@ -186,13 +179,13 @@ void getWheelPowerDistribution(float &rightWheelFactor, float &leftWheelFactor) 
         rightWheelFactor = 1;
     } else if (val <= startSteerRight) {
         leftWheelFactor = 1;
-        percent = map(val, 0, startSteerRight, 0, 100);
+        int percent = map(val, 0, startSteerRight, 0, 100);
         rightWheelFactor = percent / 100.0;
     } else {
         leftWheelFactor = 1;
         rightWheelFactor = 1;
     }
-    printTx("Wheel power factors R: " + String(rightWheelFactor) + " L: " + String(leftWheelFactor))
+    printTx("Wheel power factors R: " + String(rightWheelFactor) + " L: " + String(leftWheelFactor));
 }
 
 void readThrottleAndUpdateWheelMotors() {
@@ -220,23 +213,23 @@ void readThrottleAndUpdateWheelMotors() {
 }
 
 void updateHydraulics() {
-  // HYD_DOWN = RRPM
-  // HYD_UP = LRPM
+  // HYD_DOWN = LRPM
+  // HYD_UP = RRPM
   int lpwm = 0;
   int rpwm = 0;
 
   int val = analogRead(HYD_PIN);
   printTx("HYDRAULICS: " + String(val));
 
-   if (val > g_hydAnalogCenter + 250) {
+   if (val < g_hydAnalogCenter - 250) {
     // down
-    rpwm = 255;
-   } else if (val < g_hydAnalogCenter - 250) {
+    lpwm = 255;
+   } else if (val > g_hydAnalogCenter + 250) {
         // up
-        if (limitStichTouched()) {
+        if (limitSwitchTouched()) {
             printTx("Limit switch touched");
         } else {
-            lpwm = 255;
+            rpwm = 255;
         }
    }
 
